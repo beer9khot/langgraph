@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any, cast
 
@@ -14,6 +14,7 @@ from langgraph.checkpoint.base.id import uuid6
 from langgraph.checkpoint.serde.types import _DeltaSnapshot
 
 from langgraph._internal._config import DELTA_MAX_SUPERSTEPS_SINCE_SNAPSHOT
+from langgraph._internal._constants import PUSH
 from langgraph._internal._typing import MISSING
 from langgraph.channels.base import BaseChannel
 from langgraph.channels.delta import DeltaChannel
@@ -68,6 +69,26 @@ def delta_channels_to_snapshot(
         ):
             result.add(name)
     return result
+
+
+def update_state_channels_plan(
+    run_tasks: Iterable[Any],
+    channels: Mapping[str, BaseChannel],
+) -> tuple[set[str], set[str]]:
+    """Return channels written and DeltaChannels to snapshot on update_state."""
+    updated_channels = {c for task in run_tasks for c, _ in task.writes if c != PUSH}
+    channels_to_snapshot = {
+        c for c in updated_channels if isinstance(channels.get(c), DeltaChannel)
+    }
+    return updated_channels, channels_to_snapshot
+
+
+def update_state_channel_writes(
+    writes: Sequence[tuple[str, Any]],
+    channels_to_snapshot: set[str],
+) -> list[tuple[str, Any]]:
+    """Channel writes to persist separately from a head snapshot."""
+    return [w for w in writes if w[0] != PUSH and w[0] not in channels_to_snapshot]
 
 
 def create_checkpoint(
