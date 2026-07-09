@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+from unittest.mock import MagicMock
+
 import httpx
+import pytest
 
 from langgraph_sdk._async.http import HttpClient
 from langgraph_sdk._async.threads import ThreadsClient
@@ -445,6 +449,36 @@ def test_scoped_handle_inboxes_bounded_by_max_queue_size():
     assert handle._messages_inbox.maxsize == 16
     assert handle._tools_inbox.maxsize == 16
     assert handle._tasks_inbox.maxsize == 16
+
+
+def test_root_messages_inbox_bounded_by_max_queue_size():
+    """Root messages inbox must use the stream queue bound."""
+    from langgraph_sdk._async.stream import AsyncThreadStream
+
+    thread = AsyncThreadStream(
+        http=MagicMock(),
+        thread_id="t-1",
+        assistant_id="agent",
+        max_queue_size=16,
+    )
+
+    inbox = thread._activate_root_messages_inbox()
+
+    assert inbox.maxsize == 16
+
+
+def test_subgraphs_root_message_overflow_raises_runtime_error():
+    """Overflowing the root messages inbox must fail explicitly."""
+    from langgraph_sdk._async.stream import _SubgraphsProjection
+
+    inbox = asyncio.Queue(maxsize=1)
+    inbox.put_nowait(message_start_event(seq=1, message_id="msg-1"))
+
+    with pytest.raises(RuntimeError, match="Root messages inbox exceeded"):
+        _SubgraphsProjection._put_root_message(
+            inbox,
+            message_text_delta_event(seq=2, text="overflow", message_id="msg-1"),
+        )
 
 
 async def test_child_handle_inherits_max_queue_size_from_parent():
