@@ -400,7 +400,7 @@ def test_sync_tool_calls_run_error_fails_active_handle():
 
 
 def test_sync_root_messages_inbox_is_bounded():
-    """Root messages inbox must have an explicit maximum size."""
+    """Root messages inbox must reserve one terminal sentinel slot."""
     fake = SyncFakeServer()
     fake.script([lifecycle_completed_event(seq=1)])
     fake.set_state({})
@@ -409,14 +409,14 @@ def test_sync_root_messages_inbox_is_bounded():
         with threads.stream(thread_id="t-1", assistant_id="agent") as thread:
             inbox = thread._activate_root_messages_inbox()
 
-    assert inbox.maxsize == 1024
+    assert inbox.maxsize == 1025
 
 
 def test_sync_subgraphs_root_message_overflow_raises_runtime_error():
     """Overflowing the root messages inbox must fail explicitly."""
     from langgraph_sdk._sync.stream import _SyncSubgraphsProjection
 
-    inbox: queue.Queue[Event | None] = queue.Queue(maxsize=1)
+    inbox: queue.Queue[Event | None] = queue.Queue(maxsize=2)
     inbox.put_nowait(cast(Event, message_start_event(seq=1, message_id="msg-1")))
 
     with pytest.raises(RuntimeError, match="Root messages inbox exceeded"):
@@ -427,6 +427,23 @@ def test_sync_subgraphs_root_message_overflow_raises_runtime_error():
                 message_text_delta_event(seq=2, text="overflow", message_id="msg-1"),
             ),
         )
+
+
+def test_sync_subgraphs_root_message_close_preserves_full_inbox():
+    """Closing a full root messages inbox must not evict buffered events."""
+    from langgraph_sdk._sync.stream import _SyncSubgraphsProjection
+
+    inbox: queue.Queue[Event | None] = queue.Queue(maxsize=3)
+    first = cast(Event, message_start_event(seq=1, message_id="msg-1"))
+    second = cast(Event, message_finish_event(seq=2, message_id="msg-1"))
+    inbox.put_nowait(first)
+    inbox.put_nowait(second)
+
+    _SyncSubgraphsProjection._signal_root_inbox_closed(inbox)
+
+    assert inbox.get_nowait() is first
+    assert inbox.get_nowait() is second
+    assert inbox.get_nowait() is None
 
 
 def test_sync_drain_messages_inbox_pre_dispatches_before_yield():

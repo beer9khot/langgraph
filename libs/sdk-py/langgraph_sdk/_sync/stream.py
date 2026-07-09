@@ -956,6 +956,12 @@ class _SyncSubgraphsProjection:
 
     @staticmethod
     def _put_root_message(root_inbox: queue.Queue[Event | None], item: Event) -> None:
+        if root_inbox.maxsize > 0 and root_inbox.qsize() >= root_inbox.maxsize - 1:
+            raise RuntimeError(
+                "Root messages inbox exceeded max_queue_size while buffering "
+                "root-scope messages. Iterate thread.messages concurrently "
+                "or increase max_queue_size."
+            )
         try:
             root_inbox.put_nowait(item)
         except queue.Full as exc:
@@ -967,13 +973,14 @@ class _SyncSubgraphsProjection:
 
     @staticmethod
     def _signal_root_inbox_closed(root_inbox: queue.Queue[Event | None]) -> None:
-        while True:
-            try:
-                root_inbox.put_nowait(None)
-                return
-            except queue.Full:
-                with contextlib.suppress(queue.Empty):
-                    root_inbox.get_nowait()
+        try:
+            root_inbox.put_nowait(None)
+        except queue.Full as exc:
+            raise RuntimeError(
+                "Root messages inbox exceeded max_queue_size while closing "
+                "root-scope messages. Iterate thread.messages concurrently "
+                "or increase max_queue_size."
+            ) from exc
 
     def _subgraphs_iter(self) -> Iterator[SyncScopedStreamHandle]:
         if self._thread._transport is None:
@@ -1243,7 +1250,7 @@ class SyncThreadStream:
 
     def _activate_root_messages_inbox(self) -> queue.Queue[Event | None]:
         if self._root_messages_inbox is None:
-            self._root_messages_inbox = queue.Queue(maxsize=1024)
+            self._root_messages_inbox = queue.Queue(maxsize=1025)
         return self._root_messages_inbox
 
     def _register_active_message_stream(self, stream: ChatModelStream) -> None:

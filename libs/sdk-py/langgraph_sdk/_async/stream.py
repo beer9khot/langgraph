@@ -912,9 +912,13 @@ class _SubgraphsProjection:
         return self._subgraphs_iter()
 
     @staticmethod
-    def _put_root_message(
-        root_inbox: asyncio.Queue[Event | None], item: Event
-    ) -> None:
+    def _put_root_message(root_inbox: asyncio.Queue[Event | None], item: Event) -> None:
+        if root_inbox.maxsize > 0 and root_inbox.qsize() >= root_inbox.maxsize - 1:
+            raise RuntimeError(
+                "Root messages inbox exceeded max_queue_size while buffering "
+                "root-scope messages. Iterate thread.messages concurrently "
+                "or increase max_queue_size."
+            )
         try:
             root_inbox.put_nowait(item)
         except asyncio.QueueFull as exc:
@@ -926,13 +930,14 @@ class _SubgraphsProjection:
 
     @staticmethod
     def _signal_root_inbox_closed(root_inbox: asyncio.Queue[Event | None]) -> None:
-        while True:
-            try:
-                root_inbox.put_nowait(None)
-                return
-            except asyncio.QueueFull:
-                with contextlib.suppress(asyncio.QueueEmpty):
-                    root_inbox.get_nowait()
+        try:
+            root_inbox.put_nowait(None)
+        except asyncio.QueueFull as exc:
+            raise RuntimeError(
+                "Root messages inbox exceeded max_queue_size while closing "
+                "root-scope messages. Iterate thread.messages concurrently "
+                "or increase max_queue_size."
+            ) from exc
 
     async def _subgraphs_iter(self) -> AsyncGenerator[ScopedStreamHandle, None]:
         if self._thread._transport is None:
@@ -1358,7 +1363,8 @@ class AsyncThreadStream:
         that arrive at namespace `[]` before `thread.messages` has subscribed.
         """
         if self._root_messages_inbox is None:
-            self._root_messages_inbox = asyncio.Queue(maxsize=self._max_queue_size)
+            maxsize = self._max_queue_size + 1 if self._max_queue_size > 0 else 0
+            self._root_messages_inbox = asyncio.Queue(maxsize=maxsize)
         return self._root_messages_inbox
 
     def _register_active_message_stream(self, stream: AsyncChatModelStream) -> None:
